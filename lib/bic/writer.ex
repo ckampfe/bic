@@ -2,7 +2,7 @@ defmodule Bic.Writer do
   @moduledoc false
 
   use GenServer, restart: :transient
-  alias Bic.{Binary, DatabaseManager}
+  alias Bic.{Binary, DatabaseManager, Reader}
   require Logger
 
   @hash_size Binary.hash_size()
@@ -14,6 +14,11 @@ defmodule Bic.Writer do
   def write(db_directory, key, value) do
     [{pid, _}] = Registry.lookup(Bic.Registry, db_directory)
     GenServer.call(pid, {:write, key, {:insert, value}})
+  end
+
+  def update(db_directory, key, default, fun) do
+    [{pid, _}] = Registry.lookup(Bic.Registry, db_directory)
+    GenServer.call(pid, {:update, key, default, fun})
   end
 
   def delete_key(db_directory, key) do
@@ -189,6 +194,23 @@ defmodule Bic.Writer do
         :ets.delete(keydir, key)
 
         {:reply, :ok, state}
+    end
+  end
+
+  def handle_call({:update, key, default, fun}, from, %{db_directory: db_directory} = state) do
+    case Reader.fetch(db_directory, key) do
+      {:ok, value} ->
+        new_value = fun.(value)
+        {:reply, :ok, state} = handle_call({:write, key, {:insert, new_value}}, from, state)
+        {:reply, {:ok, new_value}, state}
+
+      :error ->
+        new_value = fun.(default)
+        {:reply, :ok, state} = handle_call({:write, key, {:insert, new_value}}, from, state)
+        {:reply, {:ok, new_value}, state}
+
+      {:error, _} = e ->
+        {:reply, e, state}
     end
   end
 

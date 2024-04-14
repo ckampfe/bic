@@ -17,8 +17,10 @@ defmodule Bic.Reader do
       {:database_tid_lookup, :error} ->
         {:error, {:database_does_not_exist, db_directory}}
 
+      # this returns `:error` to match
+      # Elixir's `Map.fetch/2`
       {:key_lookup, :error} ->
-        {:ok, nil}
+        :error
 
       {:file_open, e} ->
         e

@@ -51,9 +51,16 @@ defmodule BicTest do
     :ok = Bic.put(dir, "k", "v")
     assert {:ok, "v"} == Bic.fetch(dir, "k")
     :ok = Bic.delete(dir, "k")
-    assert {:ok, nil} == Bic.fetch(dir, "k")
+    assert :error == Bic.fetch(dir, "k")
 
     Bic.close(dir)
+  end
+
+  test "nil is a valid value" do
+    dir = Briefly.create!(type: :directory)
+    assert {:ok, dir} == Bic.new(dir)
+    assert :ok == Bic.put(dir, "a", nil)
+    assert {:ok, nil} == Bic.fetch(dir, "a")
   end
 
   test "multiple dbs" do
@@ -69,9 +76,9 @@ defmodule BicTest do
     Bic.put(dir2, "c", "d")
 
     assert {:ok, "b"} == Bic.fetch(dir1, "a")
-    assert {:ok, nil} == Bic.fetch(dir1, "c")
+    assert :error == Bic.fetch(dir1, "c")
     assert {:ok, "d"} == Bic.fetch(dir2, "c")
-    assert {:ok, nil} == Bic.fetch(dir2, "a")
+    assert :error == Bic.fetch(dir2, "a")
 
     Bic.close(dir1)
     Bic.close(dir2)
@@ -87,7 +94,7 @@ defmodule BicTest do
 
     # 2
     {:ok, ^dir} = Bic.new(dir)
-    assert {:ok, nil} == Bic.fetch(dir, "b")
+    assert :error == Bic.fetch(dir, "b")
     :ok = Bic.put(dir, "c", "d")
     :ok = Bic.put(dir, "e", "f")
     :ok = Bic.close(dir)
@@ -103,9 +110,47 @@ defmodule BicTest do
 
     # 4
     {:ok, ^dir} = Bic.new(dir)
-    assert {:ok, nil} == Bic.fetch(dir, "c")
+    assert :error == Bic.fetch(dir, "c")
     assert ["a", "e"] == Bic.keys(dir) |> Enum.sort()
     :ok = Bic.put(dir, "e", "g")
     assert {:ok, "g"} == Bic.fetch(dir, "e")
+  end
+
+  test "update/4 key is present" do
+    dir = Briefly.create!(type: :directory)
+    assert {:ok, dir} == Bic.new(dir)
+    assert :ok == Bic.put(dir, "a", "b")
+
+    assert {:ok, "bbbb"} ==
+             Bic.update(dir, "a", fn current ->
+               current <> current <> current <> current
+             end)
+
+    assert {:ok, "bbbb"} == Bic.fetch(dir, "a")
+  end
+
+  test "update/4 key is not present" do
+    dir = Briefly.create!(type: :directory)
+    assert {:ok, dir} == Bic.new(dir)
+
+    assert {:ok, "xxxx"} ==
+             Bic.update(dir, "a", "x", fn current ->
+               current <> current <> current <> current
+             end)
+
+    assert {:ok, "xxxx"} == Bic.fetch(dir, "a")
+
+    assert :ok == Bic.put(dir, 1, nil)
+
+    # nil is not treated differently,
+    # it is a valid value to insert.
+    # if you want the key to not exist,
+    # you must `delete` it.
+    assert {:ok, nil} ==
+             Bic.update(dir, 1, fn current ->
+               current
+             end)
+
+    assert {:ok, nil} == Bic.fetch(dir, 1)
   end
 end
