@@ -5,6 +5,15 @@ An implementation of [Bitcask](https://en.wikipedia.org/wiki/Bitcask).
 
 See [the paper](https://riak.com/assets/bitcask-intro.pdf).
 
+## Todo
+
+- [x] create databases
+- [x] open existing databases
+- [ ] merge database files
+- [x] put keys
+- [x] fetch keys
+- [x] delete keys
+
 ## Installation
 
 If [available in Hex](https://hex.pm/docs/publish), the package can be installed

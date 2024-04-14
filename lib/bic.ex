@@ -1,19 +1,6 @@
 defmodule Bic do
   @moduledoc """
   Documentation for `Bic`.
-  TODO
-  - [x] new
-  - [x] test new
-  - [x] put
-  - [x] test put
-  - [x] fetch
-  - [x] test fetch
-  - [x] delete
-  - [x] test delete
-  - [x] load existing database files
-  - [ ] test load existing database files
-  - [ ] merge existing database files
-  - [ ] test merge existing database files
   """
 
   def new(db_directory) when is_binary(db_directory) do
