@@ -1,21 +1,6 @@
 defmodule BicTest do
   use ExUnit.Case
-  # doctest Bic
-
-  # setup_all do
-  #   Briefly.start(nil, nil)
-  #   :application.ensure_started(:briefly)
-  #   on_exit(fn -> Briefly.cleanup() end)
-  # end
-
-  # setup do
-  #   on_exit(fn ->
-  #     Briefly.cleanup()
-  #   end)
-
-  #   dir = Briefly.create!(type: :directory)
-  #   [dir: dir]
-  # end
+  doctest Bic
 
   test "roundtrip simple" do
     dir = Briefly.create!(type: :directory)

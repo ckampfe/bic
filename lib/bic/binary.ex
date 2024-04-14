@@ -1,20 +1,15 @@
 defmodule Bic.Binary do
+  @moduledoc false
+
   @hash_size 4
   @tx_id_size 16
   @key_size_size 4
   @value_size_size 4
   @header_size @hash_size + @tx_id_size + @key_size_size + @value_size_size
 
-  # TODO make this something smaller/simpler.
-  # serializing an atom this big is stupid.
-  # every value is serialized with :erlang.term_to_binary,
-  # so we could have a special case value that is the null byte
-  # or something like that.
-  # will have to change the implementation of `write`/`delete` to accomplish this
-  # @tombstone :__BIC_INTERNAL_DELETE
-  # @tombstone_bytes :erlang.term_to_binary(@tombstone)
+  # the value we write to disk to express that a key has been deleted.
+  # note that it is not encoded in any way; it is just the 0 byte.
   @tombstone <<0>>
-  @tombstone_bytes <<0>>
 
   @spec encode_term(any()) :: binary()
   def encode_term(term) do
@@ -62,10 +57,6 @@ defmodule Bic.Binary do
 
   def tombstone() do
     @tombstone
-  end
-
-  def tombstone_bytes() do
-    @tombstone_bytes
   end
 
   def tx_id_size() do

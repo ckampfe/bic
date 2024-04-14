@@ -7,11 +7,10 @@ defmodule Bic.Application do
 
   @impl true
   def start(_type, _args) do
+    Bic.DatabaseManager.create()
+
     children = [
-      # Starts a worker by calling: Bic.Worker.start_link(arg)
-      # {Bic.Worker, arg}
       {Registry, keys: :unique, name: Bic.Registry},
-      {Bic.DatabaseManager, %{}},
       {Bic.WriterSupervisor, %{}}
     ]
 

@@ -1,6 +1,8 @@
 defmodule Bic.Writer do
+  @moduledoc false
+
   use GenServer, restart: :transient
-  alias Bic.Binary
+  alias Bic.{Binary, DatabaseManager}
   require Logger
 
   @hash_size Binary.hash_size()
@@ -36,7 +38,7 @@ defmodule Bic.Writer do
   @impl GenServer
   def init(%{db_directory: db_directory} = state) do
     keydir_tid = :ets.new(:keydir, [:protected, :set, read_concurrency: true])
-    :ok = Bic.DatabaseManager.new(db_directory, keydir_tid)
+    :ok = DatabaseManager.register(db_directory, keydir_tid)
 
     db_files =
       db_directory
@@ -74,8 +76,6 @@ defmodule Bic.Writer do
         {key, file_id, value_size, value_position, tx_id}
       end)
 
-    tx_id = latest_tx_id + 1
-
     true = :ets.insert(keydir_tid, entries)
 
     {:ok, active_file} =
@@ -89,17 +89,10 @@ defmodule Bic.Writer do
       |> Map.put(:active_file_id, active_file_id)
       |> Map.put(:keydir, keydir_tid)
       |> Map.put(:offset, 0)
-      |> Map.put(:tx_id, tx_id)
+      |> Map.put(:tx_id, latest_tx_id + 1)
 
-    # {:ok, args, {:continue, :setup}}
     {:ok, state}
   end
-
-  # @impl GenServer
-  # def handle_continue(:setup, %{db_directory: db_directory} = state) do
-
-  #   {:noreply, state}
-  # end
 
   @impl GenServer
   def handle_call(
@@ -122,9 +115,11 @@ defmodule Bic.Writer do
         {:insert, v} ->
           Binary.encode_term(v)
 
-        # pass through untouched
-        {:delete, v} ->
-          v
+        # pass through untouched,
+        # as when reading we just do a direct binary comparison
+        # against this value
+        :delete ->
+          Binary.tombstone()
       end
 
     key_size =
@@ -148,10 +143,6 @@ defmodule Bic.Writer do
     hash =
       Binary.hash(payload)
 
-    # guarantee that the hash length is always 64 bytes
-    # :crypto.hash/2 can return anything, I don't think
-    # the API guarantees that it is 64 bytes,
-    # so we need to guard it
     @hash_size = byte_size(hash)
 
     # an iolist, so there is no further serialization,
@@ -160,7 +151,6 @@ defmodule Bic.Writer do
 
     :ok = IO.binwrite(active_file, entry)
 
-    # size of hash + size of serialized payload
     value_position = offset + Binary.header_size() + key_size
 
     :ets.insert(keydir, {
@@ -194,7 +184,7 @@ defmodule Bic.Writer do
 
       _ ->
         {:reply, :ok, state} =
-          handle_call({:write, key, {:delete, Binary.tombstone()}}, from, state)
+          handle_call({:write, key, :delete}, from, state)
 
         :ets.delete(keydir, key)
 
@@ -204,10 +194,7 @@ defmodule Bic.Writer do
 
   def handle_call(:stop, _from, %{db_directory: db_directory} = state) do
     :ok = Registry.unregister(Bic.Registry, db_directory)
-    # this shouldn't have to automatically be deleted, as it will go away
-    # when the owning process (this process) shuts down
-    # true = :ets.delete(keydir_tid)
-    :ok = Bic.DatabaseManager.remove(db_directory)
+    :ok = DatabaseManager.unregister(db_directory)
     {:stop, :shutdown, :ok, state}
   end
 end

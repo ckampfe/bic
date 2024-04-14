@@ -12,6 +12,7 @@ See [the paper](https://riak.com/assets/bitcask-intro.pdf).
 - [x] put keys
 - [x] fetch keys
 - [x] delete keys
+- [ ] migrate to new file when max file size reached
 
 ## Installation
 

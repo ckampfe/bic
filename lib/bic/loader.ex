@@ -1,4 +1,6 @@
 defmodule Bic.Loader do
+  @moduledoc false
+
   require Logger
   alias Bic.Binary
   # merge process:
@@ -206,21 +208,12 @@ defmodule Bic.Loader do
         value_position = offset + header_bytes_read + key_size
         new_offset = offset + header_bytes_read + payload_bytes_read
 
-        # Map.put(entries, key, [
-        #   hash,
-        #   encoded_tx_id,
-        #   encoded_key_size,
-        #   encoded_value_size,
-        #   encoded_key,
-        #   encoded_value
-        # ])
-
         Logger.debug(
           "loaded entry: #{inspect({key, file_id, value_size, value_position, tx_id})}"
         )
 
         entry =
-          if encoded_value == Binary.tombstone_bytes() do
+          if encoded_value == Binary.tombstone() do
             {:deleted,
              {
                file_id,
