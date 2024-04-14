@@ -1,6 +1,9 @@
 # Bic
 
 **TODO: Add description**
+An implementation of [Bitcask](https://en.wikipedia.org/wiki/Bitcask).
+
+See [the paper](https://riak.com/assets/bitcask-intro.pdf).
 
 ## Installation
 
