@@ -2,7 +2,7 @@ defmodule Bic.Writer do
   @moduledoc false
 
   use GenServer, restart: :transient
-  alias Bic.{Binary, DatabaseManager, Reader}
+  alias Bic.{Binary, DatabaseManager, Keydir, Reader}
   require Logger
 
   @hash_size Binary.hash_size()
@@ -42,8 +42,8 @@ defmodule Bic.Writer do
   # but the race condition *is possible* if we use handle_continue instead.
   @impl GenServer
   def init(%{db_directory: db_directory} = state) do
-    keydir_tid = :ets.new(:keydir, [:protected, :set, read_concurrency: true])
-    :ok = DatabaseManager.register(db_directory, keydir_tid)
+    keydir = Keydir.new()
+    :ok = DatabaseManager.register(db_directory, keydir)
 
     db_files =
       db_directory
@@ -81,7 +81,7 @@ defmodule Bic.Writer do
         {key, file_id, value_size, value_position, tx_id}
       end)
 
-    true = :ets.insert(keydir_tid, entries)
+    true = Keydir.insert(keydir, entries)
 
     {:ok, active_file} =
       [db_directory, to_string(active_file_id)]
@@ -92,7 +92,7 @@ defmodule Bic.Writer do
       state
       |> Map.put(:active_file, active_file)
       |> Map.put(:active_file_id, active_file_id)
-      |> Map.put(:keydir, keydir_tid)
+      |> Map.put(:keydir, keydir)
       |> Map.put(:offset, 0)
       |> Map.put(:tx_id, latest_tx_id + 1)
 
@@ -158,13 +158,16 @@ defmodule Bic.Writer do
 
     value_position = offset + Binary.header_size() + key_size
 
-    :ets.insert(keydir, {
-      key,
-      active_file_id,
-      value_size,
-      value_position,
-      tx_id
-    })
+    Keydir.insert(
+      keydir,
+      {
+        key,
+        active_file_id,
+        value_size,
+        value_position,
+        tx_id
+      }
+    )
 
     entry_size = Binary.header_size() + key_size + value_size
 
@@ -183,16 +186,16 @@ defmodule Bic.Writer do
         from,
         %{keydir: keydir} = state
       ) do
-    case :ets.lookup(keydir, key) do
-      [] ->
-        {:reply, :ok, state}
-
-      _ ->
+    case Keydir.fetch(keydir, key) do
+      {:ok, _} ->
         {:reply, :ok, state} =
           handle_call({:write, key, :delete}, from, state)
 
-        :ets.delete(keydir, key)
+        Keydir.delete(keydir, key)
 
+        {:reply, :ok, state}
+
+      :error ->
         {:reply, :ok, state}
     end
   end
