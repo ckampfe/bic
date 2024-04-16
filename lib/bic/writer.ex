@@ -86,7 +86,7 @@ defmodule Bic.Writer do
     {:ok, active_file} =
       [db_directory, to_string(active_file_id)]
       |> Path.join()
-      |> File.open([:exclusive, :append, :raw])
+      |> File.open([:append, :raw])
 
     state =
       state
