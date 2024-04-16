@@ -3,14 +3,17 @@ defmodule Bic do
   Documentation for `Bic`, an implementation of [Bitcask](https://riak.com/assets/bitcask-intro.pdf).
   """
 
+  @default_max_size_bytes 2 ** 28
+
   @doc """
   Create a new database in `db_directory`.
   If data exists in the directory, it will be loaded.
   The database is ready to read and wite when this function returns.
   """
   @spec new(binary()) :: :ignore | {:error, any()} | {:ok, binary()} | {:ok, pid(), any()}
-  def new(db_directory) when is_binary(db_directory) do
-    with {:ok, _writer_pid} <- Bic.WriterSupervisor.start_child(db_directory) do
+  def new(db_directory, options \\ [max_file_size_bytes: @default_max_size_bytes])
+      when is_binary(db_directory) do
+    with {:ok, _writer_pid} <- Bic.WriterSupervisor.start_child(db_directory, options) do
       {:ok, db_directory}
     else
       e ->

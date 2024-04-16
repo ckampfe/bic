@@ -153,4 +153,27 @@ defmodule BicTest do
 
     assert {:ok, nil} == Bic.fetch(dir, 1)
   end
+
+  test "max file size" do
+    dir = Briefly.create!(type: :directory)
+    {:ok, ^dir} = Bic.new(dir, max_file_size_bytes: 100)
+
+    # file initially contains 0 bytes
+    :ok = Bic.put(dir, :a, 10)
+    # file contains 35 bytes
+    :ok = Bic.put(dir, :b, 43)
+    # file contains 70 bytes
+    :ok = Bic.put(dir, :c, 10)
+    # file contains 105 bytes, triggers new file creation
+    :ok = Bic.put(dir, :a, 20)
+    # new file contains 35 bytes, old file still exists
+
+    files = File.ls!(dir)
+    assert ["1", "2"] == Enum.sort(files)
+    assert Enum.count(files) == 2
+
+    assert {:ok, 20} == Bic.fetch(dir, :a)
+    assert {:ok, 43} == Bic.fetch(dir, :b)
+    assert {:ok, 10} == Bic.fetch(dir, :c)
+  end
 end

@@ -7,7 +7,8 @@ defmodule Bic.Writer do
 
   @hash_size Binary.hash_size()
 
-  def start_link(%{db_directory: db_directory} = args) when is_binary(db_directory) do
+  def start_link(%{db_directory: db_directory, options: _options} = args)
+      when is_binary(db_directory) do
     GenServer.start_link(__MODULE__, args, name: {:via, Registry, {Bic.Registry, db_directory}})
   end
 
@@ -104,6 +105,7 @@ defmodule Bic.Writer do
         {:write, key, value},
         _from,
         %{
+          db_directory: db_directory,
           keydir: keydir,
           active_file: active_file,
           offset: offset,
@@ -155,6 +157,7 @@ defmodule Bic.Writer do
     entry = [hash, payload]
 
     :ok = IO.binwrite(active_file, entry)
+    :ok = :file.datasync(active_file)
 
     value_position = offset + Binary.header_size() + key_size
 
@@ -177,6 +180,25 @@ defmodule Bic.Writer do
         offset + entry_size
       end)
       |> Map.put(:tx_id, tx_id)
+
+    state =
+      if state[:offset] >= state[:options][:max_file_size_bytes] do
+        File.close(active_file)
+
+        active_file_id = active_file_id + 1
+
+        {:ok, new_active_file} =
+          [db_directory, to_string(active_file_id)]
+          |> Path.join()
+          |> File.open([:append, :raw])
+
+        state
+        |> Map.put(:active_file_id, active_file_id)
+        |> Map.put(:offset, 0)
+        |> Map.put(:active_file, new_active_file)
+      else
+        state
+      end
 
     {:reply, :ok, state}
   end
