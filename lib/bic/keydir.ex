@@ -12,8 +12,8 @@ defmodule Bic.Keydir do
       [] ->
         :error
 
-      [{key, active_file_id, value_size, value_offset, tx_id}] ->
-        {:ok, {key, active_file_id, value_size, value_offset, tx_id}}
+      [{key, file_id, value_size, value_offset, tx_id}] ->
+        {:ok, {key, file_id, value_size, value_offset, tx_id}}
     end
   end
 
@@ -21,6 +21,29 @@ defmodule Bic.Keydir do
   def insert(keydir, entry_or_entries)
       when is_tuple(entry_or_entries) or is_list(entry_or_entries) do
     :ets.insert(keydir, entry_or_entries)
+  end
+
+  @spec insert_if_later(:ets.tid(), list()) :: :ok
+  def insert_if_later(keydir, entries) when is_list(entries) do
+    Enum.each(entries, fn {key, _, _, _, new_tx_id} = new_entry ->
+      case fetch(keydir, key) do
+        # if the new txid is >= the existing txid for a given key,
+        # that means the key is still live, and the location of the
+        # record this entry points to could be in a new file on disk,
+        # given the merge
+        {:ok, {_, _, _, _, existing_tx_id}} ->
+          if new_tx_id >= existing_tx_id do
+            insert(keydir, new_entry)
+          end
+
+        # if the key does not exist, that means it was deleted
+        # from the keydir and active file, so do not insert anything,
+        # as by definition all records in the nonactive db files are
+        # as old or older than records in the keydir/active db file
+        :error ->
+          nil
+      end
+    end)
   end
 
   @spec delete(:ets.tid(), any()) :: true

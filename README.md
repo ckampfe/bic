@@ -8,11 +8,15 @@ See [the paper](https://riak.com/assets/bitcask-intro.pdf).
 
 - [x] create databases
 - [x] open existing databases
-- [ ] merge database files
+- [x] merge database files
 - [x] put keys
 - [x] fetch keys
 - [x] delete keys
 - [x] migrate to new file when max file size reached
+- [ ] error recovery when hashes do not match
+- [ ] todo examples on public fns
+- [x] some kind of lock to prevent stale reads during merge
+- [ ] investigate mechanisms for what to do if keydir is locked during merge
 
 ## Installation
 

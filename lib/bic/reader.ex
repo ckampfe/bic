@@ -1,14 +1,16 @@
 defmodule Bic.Reader do
   @moduledoc false
 
-  alias Bic.{Binary, DatabaseManager, Keydir}
+  alias Bic.{Binary, DatabaseManager, Keydir, Lock}
 
   def fetch(db_directory, key) when is_binary(db_directory) do
-    with {:database_tid_lookup, {:ok, keydir_tid}} <-
+    with {:merge_lock, :unlocked} <-
+           {:merge_lock, Lock.status(Lock.get({Bic, db_directory, :merge_lock}))},
+         {:database_tid_lookup, {:ok, keydir_tid}} <-
            {:database_tid_lookup, Bic.DatabaseManager.fetch(db_directory)},
-         {:key_lookup, {:ok, {_key, active_file_id, value_size, value_offset, _tx_id}}} <-
+         {:key_lookup, {:ok, {_key, file_id, value_size, value_offset, _tx_id}}} <-
            {:key_lookup, Keydir.fetch(keydir_tid, key)},
-         db_file = Path.join([db_directory, to_string(active_file_id)]),
+         db_file = Path.join([db_directory, to_string(file_id)]),
          {:file_open, {:ok, file}} <- {:file_open, File.open(db_file, [:read, :raw])},
          {:file_seek, {:ok, _}} <- {:file_seek, :file.position(file, value_offset)},
          {:file_read, value_bytes} <- {:file_read, IO.binread(file, value_size)} do
@@ -30,6 +32,9 @@ defmodule Bic.Reader do
 
       {:file_read, e} ->
         e
+
+      {:merge_lock, :locked} ->
+        {:error, :database_is_locked_for_merge}
     end
   end
 

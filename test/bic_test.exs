@@ -1,5 +1,5 @@
 defmodule BicTest do
-  use ExUnit.Case
+  use ExUnit.Case, async: true
   doctest Bic
 
   test "roundtrip simple" do

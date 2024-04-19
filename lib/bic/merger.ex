@@ -1,31 +1,8 @@
-defmodule Bic.Loader do
+defmodule Bic.Merger do
   @moduledoc false
 
   require Logger
   alias Bic.Binary
-  # merge process:
-  # - get all non-active db files
-  # - iterate over those files, building a new keydir,
-  # - keeping only the latest nondeleted keyvalues
-  # - write new db files
-  # - swap in newest keydir, atomically, so that readers will have an atomic
-  #   view of live keys
-  # - delete old db files
-  #
-  # - how to name/number new db files?
-  #   reusing existing numbers in some way, as it is guaranteed that
-  #   the new keyspace/entryspace size
-  #   will be <= previous keyspace/entryspace size
-  # - how to number entries? keep latest txid, as it is guaranteed to be
-  #   less than any txid in the current active file. this also allows
-  #   the writer process to continue uninterrupted
-  #
-  # ***TODO***
-  # figure out the differences between loading files and merging files
-  # right now `load_data_files` kinda does both.
-  # merging files need to rewrite data, so they need the entire entry loaded,
-  # vs. loading data, which only needs to create an accurate keydir
-  # how to reconcile this? seems like a lot of duplicated logic
 
   @hash_size Binary.hash_size()
   @tx_id_size Binary.tx_id_size()
@@ -33,14 +10,6 @@ defmodule Bic.Loader do
   @value_size_size Binary.value_size_size()
   @header_size @hash_size + @tx_id_size + @key_size_size + @value_size_size
 
-  @doc """
-  keydir needs,
-    from the paper:
-      `key -> {file_id, value_size, value_position (offset), timestamp}`
-
-    translated into ets:
-      `{key, file_id, entry_size, offset, tx_id}`
-  """
   def load(db_directory, file_ids) do
     {usec, return} =
       :timer.tc(fn ->
@@ -48,36 +17,25 @@ defmodule Bic.Loader do
 
         Logger.debug("loading files: #{inspect(file_ids)}")
 
-        file_entries =
+        file_records =
           file_ids
           |> Task.async_stream(fn file_id ->
             Logger.debug("loading file: #{file_id}")
+            # {key, tx_id, binary_of_record_on_disk}
             read_entries_from_file(db_directory, file_id)
           end)
           |> Enum.map(fn {:ok, %{entries: entries}} -> entries end)
 
-        merged_entries =
-          file_entries
-          |> Enum.reduce(%{}, fn file_entries, all_entries ->
+        merged_records =
+          file_records
+          |> Enum.reduce(%{}, fn file_records, all_entries ->
             Map.merge(
               all_entries,
-              file_entries,
+              file_records,
               fn _k,
-                 {_liveness1,
-                  {
-                    _file_id1,
-                    _value_size1,
-                    _value_position1,
-                    tx_id1
-                  }} =
+                 {_liveness1, tx_id1, _record1, _, _, _} =
                    v1,
-                 {_liveness2,
-                  {
-                    _file_id2,
-                    _value_size2,
-                    _value_position2,
-                    tx_id2
-                  }} =
+                 {_liveness2, tx_id2, _record2, _, _, _} =
                    v2 ->
                 if tx_id1 > tx_id2 do
                   v1
@@ -88,57 +46,28 @@ defmodule Bic.Loader do
             )
           end)
           |> Stream.filter(fn
-            {_key, {:live, _entry}} ->
+            {_key, {:live, _tx_id1, _record, _header_bytes_read, _key_size, _value_size}} ->
               true
 
-            {_key, {:deleted, _entry}} ->
+            # tx_id,
+            # [raw_header, raw_payload],
+            # header_bytes_read,
+            # key_size,
+            # value_size
+            {_key, {:deleted, _tx_id2, _record, _header_bytes_read, _key_size, _value_size}} ->
               false
           end)
-          |> Stream.map(fn {key, {_, entry}} ->
-            {key, entry}
+          |> Stream.map(fn {key,
+                            {_liveness, tx_id, record, header_bytes_read, key_size, value_size}} ->
+            {key, tx_id, record, header_bytes_read, key_size, value_size}
           end)
 
-        latest_tx_id =
-          Enum.reduce(merged_entries, 0, fn {_key, {_, _, _, tx_id}}, acc ->
-            if tx_id > acc do
-              tx_id
-            else
-              acc
-            end
-          end)
-
-        {merged_entries, latest_tx_id}
+        merged_records
       end)
 
     Logger.debug("loaded entries in #{usec / 1000}ms")
 
     return
-  end
-
-  @spec nonactive_db_files(binary(), pos_integer()) :: Stream.t()
-  def nonactive_db_files(db_directory, active_file_id) do
-    db_directory
-    |> db_files()
-    |> Stream.filter(fn file_id ->
-      file_id != active_file_id
-    end)
-  end
-
-  @spec db_files(binary()) :: Stream.t()
-  def db_files(db_directory) do
-    db_directory
-    |> File.ls!()
-    |> Stream.map(fn file_name ->
-      case Integer.parse(file_name) do
-        {i, ""} -> {:ok, i}
-        _ -> nil
-      end
-    end)
-    |> Stream.filter(fn
-      {:ok, _i} -> true
-      _ -> false
-    end)
-    |> Stream.map(fn {:ok, file_id} -> file_id end)
   end
 
   defp read_entries_from_file(db_directory, file_id) do
@@ -195,14 +124,16 @@ defmodule Bic.Loader do
             encoded_value_size: encoded_value_size,
             tx_id: tx_id,
             key_size: key_size,
-            value_size: value_size
+            value_size: value_size,
+            raw_header: raw_header
           }, header_bytes_read, rest1} <- read_header(buf),
          {:ok,
           %{
             encoded_key: encoded_key,
             encoded_value: encoded_value,
-            key: key
+            key: key,
             # value: _value
+            raw_payload: raw_payload
           }, payload_bytes_read, rest2} <- read_payload(rest1, key_size, value_size) do
       payload =
         [
@@ -226,21 +157,38 @@ defmodule Bic.Loader do
 
         entry =
           if encoded_value == Binary.tombstone() do
-            {:deleted,
-             {
-               file_id,
-               value_size,
-               value_position,
-               tx_id
-             }}
+            {
+              :deleted,
+              #  {
+              #    file_id,
+              #    value_size,
+              #    value_position,
+              #    tx_id
+              #  }
+              tx_id,
+              [raw_header, raw_payload],
+              header_bytes_read,
+              key_size,
+              value_size
+              # value_position
+            }
           else
-            {:live,
-             {
-               file_id,
-               value_size,
-               value_position,
-               tx_id
-             }}
+            # {key, tx_id, record, header_bytes_read, key_size, value_size}
+            {
+              :live,
+              #  {
+              #    file_id,
+              #    value_size,
+              #    value_position,
+              #    tx_id
+              #  }
+              tx_id,
+              [raw_header, raw_payload],
+              header_bytes_read,
+              key_size,
+              value_size
+              # value_position
+            }
           end
 
         new_entries =
@@ -290,7 +238,8 @@ defmodule Bic.Loader do
        encoded_value_size: encoded_value_size,
        tx_id: tx_id,
        key_size: key_size,
-       value_size: value_size
+       value_size: value_size,
+       raw_header: [hash, encoded_tx_id, encoded_key_size, encoded_value_size]
      }, @hash_size + @tx_id_size + @key_size_size + @value_size_size, rest}
   end
 
@@ -311,8 +260,116 @@ defmodule Bic.Loader do
      %{
        encoded_key: encoded_key,
        encoded_value: encoded_value,
-       key: :erlang.binary_to_term(encoded_key)
-       #  value: :erlang.binary_to_term(encoded_value)
+       key: :erlang.binary_to_term(encoded_key),
+       #  value: :erlang.binary_to_term(encoded_value),
+       raw_payload: [encoded_key, encoded_value]
      }, key_size + value_size, rest}
+  end
+
+  # TODO all of this is really bad
+  def write_records_for_merge(_, [], _, _) do
+    []
+  end
+
+  def write_records_for_merge(
+        db_directory,
+        records,
+        max_file_size_bytes,
+        [file_id | _remaining_file_ids] = file_ids
+      ) do
+    path =
+      Path.join([db_directory, to_string(file_id) <> ".merge"])
+
+    file = File.open!(path, [:append, :raw])
+
+    offset = 0
+
+    keydir_entries = []
+
+    args = %{
+      db_directory: db_directory,
+      records: records,
+      max_file_size_bytes: max_file_size_bytes,
+      offset: offset,
+      file_ids: file_ids,
+      current_file: file,
+      current_file_id: file_id,
+      keydir_entries: keydir_entries
+    }
+
+    write_records_for_merge(args)
+  end
+
+  defp write_records_for_merge(%{records: [], keydir_entries: keydir_entries}) do
+    keydir_entries
+  end
+
+  defp write_records_for_merge(%{
+         db_directory: db_directory,
+         records: [
+           {key, tx_id, record, header_bytes_read, key_size, value_size}
+           | records
+         ],
+         max_file_size_bytes: max_file_size_bytes,
+         offset: offset,
+         file_ids: [next_file_id | remaining_file_ids] = file_ids,
+         current_file: current_file,
+         current_file_id: current_file_id,
+         keydir_entries: keydir_entries
+       }) do
+    if offset >= max_file_size_bytes do
+      path =
+        Path.join([db_directory, to_string(next_file_id) <> ".merge"])
+
+      new_file = File.open!(path, [:append, :raw])
+
+      IO.binwrite(new_file, record)
+
+      value_offset = offset + header_bytes_read + key_size
+
+      keydir_entry = {
+        key,
+        next_file_id,
+        value_size,
+        value_offset,
+        tx_id
+      }
+
+      write_records_for_merge(%{
+        db_directory: db_directory,
+        records: records,
+        max_file_size_bytes: max_file_size_bytes,
+        offset: offset + :erlang.iolist_size(record),
+        file_ids: remaining_file_ids,
+        current_file: new_file,
+        current_file_id: next_file_id,
+        keydir_entries: [keydir_entry | keydir_entries]
+      })
+    else
+      IO.binwrite(current_file, record)
+
+      # keydir schema:
+      # {key, active_file_id, value_size, value_offset, tx_id}
+      value_offset = offset + header_bytes_read + key_size
+
+      keydir_entry = {
+        key,
+        current_file_id,
+        value_size,
+        value_offset,
+        tx_id
+      }
+
+      write_records_for_merge(%{
+        db_directory: db_directory,
+        records: records,
+        max_file_size_bytes: max_file_size_bytes,
+        offset: offset + :erlang.iolist_size(record),
+        file_ids: file_ids,
+        current_file: current_file,
+        current_file_id: current_file_id,
+        keydir_entries: [keydir_entry | keydir_entries]
+      })
+    end
   end
 end

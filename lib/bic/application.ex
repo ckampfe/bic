@@ -11,6 +11,7 @@ defmodule Bic.Application do
 
     children = [
       {Registry, keys: :unique, name: Bic.Registry},
+      {Task.Supervisor, name: Bic.MergeSupervisor},
       {Bic.WriterSupervisor, %{}}
     ]
 

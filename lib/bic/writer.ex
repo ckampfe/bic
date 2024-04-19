@@ -1,8 +1,8 @@
 defmodule Bic.Writer do
   @moduledoc false
-
   use GenServer, restart: :transient
-  alias Bic.{Binary, DatabaseManager, Keydir, Reader}
+  alias Bic.{Binary, DatabaseManager, Keydir, Loader, Lock, Merger, Reader}
+  require Bic.Lock
   require Logger
 
   @hash_size Binary.hash_size()
@@ -27,6 +27,11 @@ defmodule Bic.Writer do
     GenServer.call(pid, {:delete, key})
   end
 
+  def merge_async(db_directory) do
+    [{pid, _}] = Registry.lookup(Bic.Registry, db_directory)
+    GenServer.call(pid, :merge_async)
+  end
+
   def stop(db_directory) do
     [{pid, _}] = Registry.lookup(Bic.Registry, db_directory)
     GenServer.call(pid, :stop)
@@ -46,20 +51,7 @@ defmodule Bic.Writer do
     keydir = Keydir.new()
     :ok = DatabaseManager.register(db_directory, keydir)
 
-    db_files =
-      db_directory
-      |> File.ls!()
-      |> Stream.map(fn file_name ->
-        case Integer.parse(file_name) do
-          {i, _} -> {:ok, i}
-          _ -> nil
-        end
-      end)
-      |> Stream.filter(fn
-        {:ok, _i} -> true
-        _ -> false
-      end)
-      |> Stream.map(fn {:ok, i} -> i end)
+    db_files = Loader.db_files(db_directory)
 
     latest_file_id =
       db_files
@@ -75,7 +67,7 @@ defmodule Bic.Writer do
           id + 1
       end
 
-    {entries, latest_tx_id} = Bic.Loader.load(db_directory)
+    {entries, latest_tx_id} = Bic.Loader.load(db_directory, db_files)
 
     entries =
       Enum.map(entries, fn {key, {file_id, value_size, value_position, tx_id}} ->
@@ -96,6 +88,8 @@ defmodule Bic.Writer do
       |> Map.put(:keydir, keydir)
       |> Map.put(:offset, 0)
       |> Map.put(:tx_id, latest_tx_id + 1)
+
+    Lock.new({Bic, db_directory, :merge_lock})
 
     {:ok, state}
   end
@@ -203,6 +197,7 @@ defmodule Bic.Writer do
     {:reply, :ok, state}
   end
 
+  @impl GenServer
   def handle_call(
         {:delete, key},
         from,
@@ -222,6 +217,7 @@ defmodule Bic.Writer do
     end
   end
 
+  @impl GenServer
   def handle_call({:update, key, default, fun}, from, %{db_directory: db_directory} = state) do
     case Reader.fetch(db_directory, key) do
       {:ok, value} ->
@@ -239,9 +235,175 @@ defmodule Bic.Writer do
     end
   end
 
+  def handle_call(
+        :merge_async,
+        _from,
+        %{merge_ref: merge_ref} =
+          state
+      )
+      when not is_nil(merge_ref) do
+    {:reply, {:error, :merge_already_started}, state}
+  end
+
+  @impl GenServer
+  def handle_call(
+        :merge_async,
+        {from, _ref},
+        %{db_directory: db_directory, active_file_id: active_file_id, options: options} = state
+      ) do
+    task =
+      Task.Supervisor.async_nolink(Bic.MergeSupervisor, fn ->
+        max_file_size_bytes = Keyword.fetch!(options, :max_file_size_bytes)
+
+        nonactive_db_files =
+          Bic.Loader.nonactive_db_files(db_directory, active_file_id) |> Enum.into([])
+
+        merged_records = Bic.Merger.load(db_directory, nonactive_db_files) |> Enum.into([])
+
+        # TODO this should report back:
+        # 1. how many old files there were
+        # 2. how many old records there were
+        # 3. how many old records there are now
+        Merger.write_records_for_merge(
+          db_directory,
+          merged_records,
+          max_file_size_bytes,
+          nonactive_db_files
+        )
+
+        # TODO
+        # - `merge` function in `loader.ex` that is like `load`,
+        #   but instead of returning keydir Entries it returns the actual
+        #   on-disk payloads.
+        # - `bulk` module
+        # - automerge functionality of some kind. ideas:
+        #   - every time an existing key is written to, increment a counter.
+        #     when `counter / size(keyspace)` becomes large enough, run a merge.
+        #     example: 10,000 keys, each has 4 writes total, so counter is 30,000
+        #     (first write to each key doesn't count).
+        #     "merge factor" is then 3.
+        #     interesting effects:
+        #       - counter only grows (until merge)
+        #       - deletes decrease the size of the keyspace, which in turn
+        #         increases the "merge factor":
+        #         i.e. you have 10,000 keys and 30,000 counter and you
+        #         delete 2,000 keys, leaving 8,000 live keys,
+        #         merge factor becomes 3.75 instead of 3.0
+        #       - alternatively, also increment the counter on deletes,
+        #         so deleting 2,000 keys goes to counter = 32,000,
+        #         keyspace 8,000, merge factor 4.0
+        #   - probably need some kind ability to take actual on-disk size into
+        #     effect. don't trigger merge if the on-disk size is only 40MB, etc.
+        #     have the ability to set a threshold, so merging is only enabled
+        #     when total db disk usage >= i.e., 5GB, or whatever.
+        # "foooooooooo"
+      end)
+
+    state =
+      state
+      |> Map.put(:merge_ref, task.ref)
+      |> Map.put(:merge_reply_to, from)
+
+    {:reply, :ok, state}
+  end
+
+  @impl GenServer
   def handle_call(:stop, _from, %{db_directory: db_directory} = state) do
     :ok = Registry.unregister(Bic.Registry, db_directory)
     :ok = DatabaseManager.unregister(db_directory)
     {:stop, :shutdown, :ok, state}
+  end
+
+  @doc """
+  this is the critical section (in terms of coordination).
+  the single-threaded section of the merge occurs here.
+  we have to perform:
+  - insertions into keydir
+  - removal of old files
+  - renaming of merge files into regular files
+  - reply to the subscribing process with the results
+  """
+  @impl GenServer
+  def handle_info(
+        {ref, answer},
+        %{
+          merge_ref: ref,
+          merge_reply_to: reply_to,
+          db_directory: db_directory,
+          keydir: keydir,
+          active_file_id: active_file_id
+        } =
+          state
+      ) do
+    # `:flush` here removes the :DOWN message,
+    # so we don't receive it
+    Process.demonitor(ref, [:flush])
+
+    nonactive_file_ids =
+      Loader.nonactive_db_files(db_directory, active_file_id)
+      |> Enum.into([])
+
+    Lock.with_lock Lock.get({Bic, db_directory, :merge_lock}) do
+      Enum.each(nonactive_file_ids, fn nonactive_file_id ->
+        File.rm(Path.join([db_directory, to_string(nonactive_file_id)]))
+      end)
+
+      merge_files =
+        File.ls!(db_directory)
+        |> Enum.filter(fn f ->
+          Path.extname(f) == ".merge"
+        end)
+
+      Enum.each(merge_files, fn merge_file ->
+        rename_source =
+          Path.join([db_directory, merge_file])
+
+        rename_target =
+          Path.join([db_directory, Path.rootname(merge_file, ".merge")])
+
+        File.rename!(
+          rename_source,
+          rename_target
+        )
+      end)
+
+      Keydir.insert_if_later(keydir, answer)
+    end
+
+    state =
+      state
+      |> Map.delete(:merge_ref)
+      |> Map.delete(:merge_reply_to)
+
+    # todo this should report back to the reply_to process
+    # the number of files and records on disk before and after the merge,
+    # and how long it took to perform the merge in wall clock time
+    Process.send(reply_to, {:ok, :ok}, [])
+
+    {:noreply, state}
+  end
+
+  @impl GenServer
+  def handle_info(
+        {:DOWN, ref, :process, _pid, reason},
+        %{db_directory: db_directory, merge_ref: ref, merge_reply_to: reply_to} = state
+      ) do
+    if reason != :normal do
+      Process.send(reply_to, {:error, reason}, [])
+      Logger.warning("merge process for #{db_directory} failed!")
+    end
+
+    state =
+      state
+      |> Map.delete(:merge_ref)
+      |> Map.delete(:merge_reply_to)
+
+    {:noreply, state}
+  end
+
+  @impl GenServer
+  def handle_info(msg, state) do
+    Logger.warning("unrecognized message: #{inspect(msg)}")
+    {:noreply, state}
   end
 end

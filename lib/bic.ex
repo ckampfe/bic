@@ -8,7 +8,9 @@ defmodule Bic do
   @doc """
   Create a new database in `db_directory`.
   If data exists in the directory, it will be loaded.
-  The database is ready to read and wite when this function returns.
+  The database is ready to read and write when this function returns.
+  If the size of a database file exceeds `max_file_size_bytes`, a new file is created
+  and the old file is no longer written to and considered read-only.
   """
   @spec new(binary()) :: :ignore | {:error, any()} | {:ok, binary()} | {:ok, pid(), any()}
   def new(db_directory, options \\ [max_file_size_bytes: @default_max_size_bytes])
@@ -39,9 +41,15 @@ defmodule Bic do
 
   That is, read and write operations on the same database to the same key
   do not block each other, and as a consequence, if a write occurs in another
-  process concurrently, it is possible for this function to return
-  a totally valid, consistent, but stale value.
+  process at exactly the same time, it is possible for this function to return
+  a totally valid, consistent, but now stale value with respect to the other write.
   This is an explicit tradeoff of the design of Bitcask and not a bug!
+
+  In normal operation this function will always return either a result or an error,
+  but it can return a special error `{:error, :database_is_locked_for_merge}` when the database
+  is in its critical section during a `merge` operation.
+  This merge error cannot occur unless an active merge is taking place in this database,
+  and it can only occur during a small critical section of that merge.
   """
   @spec fetch(binary(), any()) ::
           {:ok, any()} | {:error, atom() | {:database_does_not_exist, binary()}}
@@ -77,13 +85,12 @@ defmodule Bic do
   As with `put` and `delete`, nothing else can be written
   to the database while this operation is in progress.
   For this reason, be very careful not to run blocking operations in `fun`,
-  as they will block any writes to the database.
+  as they will block any other mutations (writes, deletes, updates) to the database.
 
   If `key` does not exist, `default` is passed
   to `fun`, which then executes normally.
-  ***Note that this behavior with regard to `default` being
-  passed to `fun` prior to insertion is different
-  than Elixir's `Map.update/4`.***
+  ***Note that this behavior is different different than
+  how Elixir's builtin `Map.update/4` works.***
 
   Returns the result of `fun` as `{:ok, new_value}`.
   """
@@ -124,15 +131,58 @@ defmodule Bic do
   subsequent calls to the functions in this module for the given `db_directory`
   will fail.
   """
-  @spec close(binary()) :: any()
+  @spec close(binary()) :: :ok
   def close(db_directory) when is_binary(db_directory) do
     Bic.Writer.stop(db_directory)
   end
 
   @doc """
-  Not yet implemented.
+  Starts a merge asynchronously, does not block the caller.
+
+  A merge is a destructive operation that cleans out old records
+  and old database files, producing the set of database files containing only
+  relevant records. A record is considered relevant if it is the most recent record for a given key
+  and it is live (i.e. not deleted). This means any `delete` operations will be removed from the database files
+  permanently.
+
+  Although this function is async and returns immediately,
+  note that there is still a small critical section in the database writer process
+  in order to delete old database files and rename new ones.
+  This critical section will block any other mutations (`put`, `delete`, `update`)
+  for its duration.
   """
-  def merge(db_directory) when is_binary(db_directory) do
-    {:error, :todo}
+  @spec merge_async(binary()) :: :ok
+  def merge_async(db_directory) when is_binary(db_directory) do
+    Bic.Writer.merge_async(db_directory)
+  end
+
+  @spec merge_await(binary(), non_neg_integer() | :infinity) :: {:ok, any()} | {:error, any()}
+  def merge_await(db_directory, timeout \\ :timer.seconds(5))
+
+  @doc """
+  Wait for an async merge to complete and receives its results.
+  Blocks the calling process for `timeout` milliseconds,
+  and errors if time elapsed exceeds `timeout`.
+  """
+  def merge_await(db_directory, timeout) when is_binary(db_directory) do
+    receive do
+      {:ok, value} ->
+        {:ok, value}
+
+      {:error, error} ->
+        {:error, error}
+    after
+      timeout ->
+        raise "timeout after #{inspect(timeout)}ms waiting for merge for #{db_directory}"
+    end
+  end
+
+  @doc """
+  TODO
+  block until all pending writes are on disk...
+  add an internal write buffer of configurable size
+  """
+  def flush() do
+    raise "todo"
   end
 end
