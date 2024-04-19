@@ -128,6 +128,7 @@ defmodule Bic.Loader do
   def db_files(db_directory) do
     db_directory
     |> File.ls!()
+    |> Enum.sort()
     |> Stream.map(fn file_name ->
       case Integer.parse(file_name) do
         {i, ""} -> {:ok, i}
