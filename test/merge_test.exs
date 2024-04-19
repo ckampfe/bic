@@ -20,7 +20,7 @@ defmodule MergeTest do
     :ok = Bic.merge_async(dir)
     Bic.merge_await(dir)
 
-    assert File.ls!(dir) == ["1", "2"]
+    assert Enum.sort(File.ls!(dir)) == ["1", "2"]
 
     assert {:ok, 10} == Bic.fetch(dir, :a)
     assert {:ok, 12} == Bic.fetch(dir, :b)
@@ -52,7 +52,7 @@ defmodule MergeTest do
     :ok = Bic.merge_async(dir)
     Bic.merge_await(dir)
 
-    assert File.ls!(dir) == ["1", "3"]
+    assert Enum.sort(File.ls!(dir)) == ["1", "3"]
 
     assert {:ok, 10} == Bic.fetch(dir, :a)
     assert {:ok, 12} == Bic.fetch(dir, :b)
@@ -90,7 +90,7 @@ defmodule MergeTest do
     assert :error == Bic.fetch(dir, :b)
     assert {:ok, 3} == Bic.fetch(dir, :c)
 
-    assert File.ls!(dir) == ["1", "3"]
+    assert Enum.sort(File.ls!(dir)) == ["1", "3"]
 
     :ok = Bic.close(dir)
     {:ok, ^dir} = Bic.new(dir)
@@ -149,7 +149,7 @@ defmodule MergeTest do
 
     Bic.merge_await(dir)
 
-    assert File.ls!(dir) == ["1", "2"]
+    assert Enum.sort(File.ls!(dir)) == ["1", "2"]
 
     assert {:ok, 10} == Bic.fetch(dir, :a)
     assert {:ok, 12} == Bic.fetch(dir, :b)
