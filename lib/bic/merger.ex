@@ -49,11 +49,6 @@ defmodule Bic.Merger do
             {_key, {:live, _tx_id1, _record, _header_bytes_read, _key_size, _value_size}} ->
               true
 
-            # tx_id,
-            # [raw_header, raw_payload],
-            # header_bytes_read,
-            # key_size,
-            # value_size
             {_key, {:deleted, _tx_id2, _record, _header_bytes_read, _key_size, _value_size}} ->
               false
           end)
@@ -159,35 +154,20 @@ defmodule Bic.Merger do
           if encoded_value == Binary.tombstone() do
             {
               :deleted,
-              #  {
-              #    file_id,
-              #    value_size,
-              #    value_position,
-              #    tx_id
-              #  }
               tx_id,
               [raw_header, raw_payload],
               header_bytes_read,
               key_size,
               value_size
-              # value_position
             }
           else
-            # {key, tx_id, record, header_bytes_read, key_size, value_size}
             {
               :live,
-              #  {
-              #    file_id,
-              #    value_size,
-              #    value_position,
-              #    tx_id
-              #  }
               tx_id,
               [raw_header, raw_payload],
               header_bytes_read,
               key_size,
               value_size
-              # value_position
             }
           end
 
@@ -261,7 +241,6 @@ defmodule Bic.Merger do
        encoded_key: encoded_key,
        encoded_value: encoded_value,
        key: :erlang.binary_to_term(encoded_key),
-       #  value: :erlang.binary_to_term(encoded_value),
        raw_payload: [encoded_key, encoded_value]
      }, key_size + value_size, rest}
   end
@@ -312,64 +291,44 @@ defmodule Bic.Merger do
          ],
          max_file_size_bytes: max_file_size_bytes,
          offset: offset,
-         file_ids: [next_file_id | remaining_file_ids] = file_ids,
+         file_ids: [next_file_id | remaining_file_ids] = all_file_ids,
          current_file: current_file,
          current_file_id: current_file_id,
          keydir_entries: keydir_entries
        }) do
-    if offset >= max_file_size_bytes do
-      path =
-        Path.join([db_directory, to_string(next_file_id) <> ".merge"])
+    %{file: file, file_id: file_id, file_ids: file_ids} =
+      if offset >= max_file_size_bytes do
+        path =
+          Path.join([db_directory, to_string(next_file_id) <> ".merge"])
 
-      new_file = File.open!(path, [:append, :raw])
+        new_file = File.open!(path, [:append, :raw])
 
-      IO.binwrite(new_file, record)
+        %{file: new_file, file_id: next_file_id, file_ids: remaining_file_ids}
+      else
+        %{file: current_file, file_id: current_file_id, file_ids: all_file_ids}
+      end
 
-      value_offset = offset + header_bytes_read + key_size
+    IO.binwrite(file, record)
 
-      keydir_entry = {
-        key,
-        next_file_id,
-        value_size,
-        value_offset,
-        tx_id
-      }
+    value_offset = offset + header_bytes_read + key_size
 
-      write_records_for_merge(%{
-        db_directory: db_directory,
-        records: records,
-        max_file_size_bytes: max_file_size_bytes,
-        offset: offset + :erlang.iolist_size(record),
-        file_ids: remaining_file_ids,
-        current_file: new_file,
-        current_file_id: next_file_id,
-        keydir_entries: [keydir_entry | keydir_entries]
-      })
-    else
-      IO.binwrite(current_file, record)
+    keydir_entry = {
+      key,
+      current_file_id,
+      value_size,
+      value_offset,
+      tx_id
+    }
 
-      # keydir schema:
-      # {key, active_file_id, value_size, value_offset, tx_id}
-      value_offset = offset + header_bytes_read + key_size
-
-      keydir_entry = {
-        key,
-        current_file_id,
-        value_size,
-        value_offset,
-        tx_id
-      }
-
-      write_records_for_merge(%{
-        db_directory: db_directory,
-        records: records,
-        max_file_size_bytes: max_file_size_bytes,
-        offset: offset + :erlang.iolist_size(record),
-        file_ids: file_ids,
-        current_file: current_file,
-        current_file_id: current_file_id,
-        keydir_entries: [keydir_entry | keydir_entries]
-      })
-    end
+    write_records_for_merge(%{
+      db_directory: db_directory,
+      records: records,
+      max_file_size_bytes: max_file_size_bytes,
+      offset: offset + :erlang.iolist_size(record),
+      file_ids: file_ids,
+      current_file: file,
+      current_file_id: file_id,
+      keydir_entries: [keydir_entry | keydir_entries]
+    })
   end
 end
