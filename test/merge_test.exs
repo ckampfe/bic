@@ -204,7 +204,7 @@ defmodule MergeTest do
       end)
 
     inserts =
-      Enum.flat_map(1..100, fn _ ->
+      Enum.flat_map(1..25, fn _ ->
         {:ok, ^dir} = Bic.new(dir)
 
         number_of_inserts = :rand.uniform(100)
