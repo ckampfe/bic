@@ -5,7 +5,7 @@ defmodule Bic.Reader do
 
   def fetch(db_directory, key) when is_binary(db_directory) do
     with {:merge_lock, :unlocked} <-
-           {:merge_lock, Lock.status(Lock.get({Bic, db_directory, :merge_lock}))},
+           {:merge_lock, Lock.status(Lock.get_handle({Bic, db_directory, :merge_lock}))},
          {:database_tid_lookup, {:ok, keydir_tid}} <-
            {:database_tid_lookup, Bic.DatabaseManager.fetch(db_directory)},
          {:key_lookup, {:ok, {_key, file_id, value_size, value_offset, _tx_id}}} <-

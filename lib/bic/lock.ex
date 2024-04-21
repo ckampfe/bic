@@ -1,7 +1,7 @@
 defmodule Bic.Lock do
   @moduledoc false
 
-  @compile {:inline, [get: 1, status: 1, lock: 1, unlock: 1]}
+  @compile {:inline, [get_handle: 1, status: 1, lock: 1, unlock: 1]}
 
   @doc """
   Create a lock, globally accessible with the given key.
@@ -15,8 +15,8 @@ defmodule Bic.Lock do
   Gets a handle to the lock.
   Does not actually lock the lock.
   """
-  @spec get(any()) :: :atomics.atomics_ref()
-  def get(key) do
+  @spec get_handle(any()) :: :atomics.atomics_ref()
+  def get_handle(key) do
     :persistent_term.get(key)
   end
 

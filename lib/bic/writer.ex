@@ -343,7 +343,7 @@ defmodule Bic.Writer do
       Loader.nonactive_db_files(db_directory, active_file_id)
       |> Enum.into([])
 
-    Lock.with_lock Lock.get({Bic, db_directory, :merge_lock}) do
+    Lock.with_lock Lock.get_handle({Bic, db_directory, :merge_lock}) do
       Enum.each(nonactive_file_ids, fn nonactive_file_id ->
         File.rm(Path.join([db_directory, to_string(nonactive_file_id)]))
       end)
