@@ -17,6 +17,10 @@ See [the paper](https://riak.com/assets/bitcask-intro.pdf).
 - [ ] todo examples on public fns
 - [x] some kind of lock to prevent stale reads during merge
 - [ ] investigate mechanisms for what to do if keydir is locked during merge
+- [ ] the existing "lock" is only valid at the moment it is returned.
+      it has no lexical scope or anything like that,
+      meaning that any of the subsequent file operations
+      could be invalid and unsafe. need to figure out some way to manage this.
 
 ## Installation
 
